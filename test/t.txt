@@ -1,0 +1,19 @@
+pip install pytest pytest-cov pytest-mock
+
+# Todos los tests
+pytest test/
+
+# Con coverage
+pytest test/ --cov=controllers --cov=utils --cov=services
+
+# Verbose
+pytest test/ -v
+
+# Solo un archivo
+pytest test/test_scan_controller.py
+
+# Solo una clase
+pytest test/test_scan_controller.py::TestScanController
+
+# Solo un test específico
+pytest test/test_scan_controller.py::TestScanController::test_start_scan_success
