@@ -1,0 +1,454 @@
+---
+
+# 📄 RESUMEN DOCUMENTADO DEL PROYECTO DE ESCANEO POLIHC– DEFINICIÓN INICIAL
+
+## 🎯 Objetivo General
+
+Desarrollar un sistema de escaneo estructurado en **tres fases**:
+
+1. **Conector local (Flask):** Controla el escáner físico (Toshiba e-STUDIO2822AM), gestiona el proceso de escaneo y envía las imágenes.
+2. **Interfaz web (Django + Frontend):** El usuario controla el proceso desde la web, visualiza y edita las páginas escaneadas.
+3. **Módulo OCR + IA + PostgreSQL:** Extrae información de los documentos finales y almacena los datos estructurados.
+
+---
+
+## 🧱 Arquitectura General
+
+| Componente                      | Rol                                                                                    | Tecnologías                                                   |
+| ------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| **Conector (Flask)**            | Se conecta al escáner vía TWAIN, captura páginas como WEBP (por defecto) o PNG (legacy), controla sesión | Python 32-bit, TWAIN, Flask                 |
+| **Frontend + Backend (Django)** | Interfaz para gestionar el escaneo, mostrar imágenes, permitir edición y generar PDF/A | Django, HTML/JS (Drag & Drop, edición visual)                 |
+| **OCR + IA + BD** *(fase 3)*    | Leer documentos finales y almacenar en PostgreSQL                                      | OCR (Tesseract local), IA (clasificación), PostgreSQL |
+
+---
+
+## 📌 Restricciones y Reglas Confirmadas
+
+**Cada instancia del conector Flask controla 1 escáner físico.**
+**Solo una sesión activa a la vez por escáner (bloqueo global con timeout de 20 minutos).**
+**Si el escáner está ocupado**, el sistema debe reportarlo inmediatamente con código 409.
+**Formato de imagen temporal:** **WEBP por página** por defecto (nombradas como `page_001.webp`, `page_002.webp`...). PNG legacy configurable.
+**El conector NO genera PDF.** Django es responsable de la generación del PDF/A.
+**Django recibe imágenes página por página** mediante polling y descarga HTTP.
+**Si el usuario cancela, se borran TODAS las imágenes temporales** (endpoint `/cancel`).
+**Limpieza automática programada**: Se ejecuta diariamente (configurable) para eliminar sesiones residuales.
+**Timeout de inactividad**: Carpetas de sesión con > 20 minutos de inactividad se limpian automáticamente.
+**Verificación con timeouts**: Endpoint `/check-scanner` responde en máximo 28 segundos incluso si el escáner está apagado/desconectado.
+**Detección inteligente de hojas**: Verifica disponibilidad en ADF (7s timeout) y flatbed (28s timeout) antes de iniciar.
+**Manejo de páginas en blanco**: Detecta y omite páginas blancas automáticamente.
+**Se permite continuar escaneo**: Endpoint `/continue` permite agregar más páginas a la sesión activa.
+**Soporte para modo flatbed y ADF**: El usuario puede elegir entre cristal o bandeja automática.
+**Una vez confirmado, Django genera el PDF/A y lo almacena localmente.**
+**Luego entrará OCR/IA para extracción de datos clínicos.**
+**Se debe permitir agregar imágenes externas (radiografías, fotos) en el editor web.**
+**Por decisión de la empresa, todo opera en modo local (sin VPS, sin Tailscale y sin acceso remoto).**
+
+---
+
+## 🎛 Configuración del Escaneo
+
+| Parámetro                            | Opciones Permitidas                                                 | Por defecto   |
+| ------------------------------       | ------------------------------------------------------------------- | ------------- |
+| **resolution/Resolución(dpi)**       | 300 / 400 / 600                                                     | 300           |
+| **Original Mode/Modo de escaneo**    | `Text/Photo`, `Text`, `Gray`, `Color` *(solo si necesario)*         | `Text`        |
+| **Original Size/Tamaño de página**   | A4, Carta, Oficio, Folio, Legal, etc.                               | LT-R/13"LG    |
+| **ADF-Platen/Origen**                | Platen Scan, ADF Scan ( se prioriza por la bandeja ADF Scan)        | ADF           |
+| **Duplex**                           | Si el escáner lo soporta                                            | Seleccionable |
+| **Formato final temporal**           | WEBP es el que estara por defecto (configurable a PNG)              | WEBP          |
+| **rotation/rotación**                | off, right 90, 180, left 90                                         | OFF           |
+
+
+los formatos de imagen seran
+el tamaño normal tamaño carta corresponde a LT-R 210 x 280
+A4-R 200 x 290
+LG esta ya es muy grande de largo 210 x 355
+13-LG , exacto para documentos tamaño oficio 210 x 330
+Folio - 200 x 330
+A5-R - 148 x 210
+
+Recordar cuando estas configuraciones se vayan a enviar al conector, mostrar una ventana emergente
+con un resumen de las opciones seleccionadas para que el usuario las confirme antes de iniciar el escaneo.
+
+---
+
+## 🗂️ Estructura del Conector Flask (modular)
+
+```
+scanner_connector_polihc_basic/
+│── app.py                          # Punto de entrada Flask (servidor principal)
+│── README.md                       # Documentación completa del proyecto
+│── requirements.txt                # Dependencias Python
+│── context.txt                     # Este archivo (documentación técnica)
+│
+├── config/
+│   ├── config.py                  # Parámetros de escaneo (DPI, modos, tamaños)
+│   └── settings.py                # Configuración general de Flask
+│
+├── controllers/
+│   ├── scan_controller.py         # 🔥 Endpoints principales (producción)
+│   │                              #    - /check-scanner (con timeouts)
+│   │                              #    - /start, /continue, /cancel, /finish
+│   │                              #    - /status, /pages, /download
+│   │                              #    - /run-cleanup, /cleanup/<session_id>
+│   └── test_controller.py         # Endpoints de prueba y desarrollo
+│
+├── services/
+│   └── twain_connector.py         # 🔌 Interfaz TWAIN con el escáner
+│                                  #    - scan_document() con detección de blancos
+│                                  #    - check_feeder() y check_flatbed_sheet()
+│
+├── utils/
+│   ├── file_manager.py            # Gestión de archivos WEBP/PNG por sesión
+│   ├── session_lock.py            # Sistema de bloqueo de sesiones (20 min timeout)
+│   └── list_scanners.py           # Utilidad para listar escáneres disponibles
+│
+├── scans/                          # 📁 Carpeta temporal (gitignored)
+│   └── session_*/                 # Carpetas por sesión con WEBP/PNGs
+│       ├── page_001.webp
+│       ├── page_002.webp
+│       └── ...
+│
+└── test/                           # Pruebas unitarias (pendiente)
+```
+
+---
+
+## Estado Actual del Proyecto
+
+| Componente                    | Estado                               |
+| ----------------------------- | ------------------------------------ |
+| SO                            | Windows 10/11 64-bit                 |
+| Scan Driver TWAIN             | Instalada versión 5.43.12.0 (32-bit) |
+| Python                        | 3.13.7 de 32 bits                    |
+| Escaneo con Scan Editor       | Funciona correctamente               |
+| Pruebas con IrfanView         | TWAIN funciona bien                  |
+| **API REST Flask**            | Completa y funcional                 |
+| **Sistema de sesiones**       | Implementado con bloqueo             |
+| **Verificación con timeouts** | Implementado (ADF: 7s, Flatbed: 28s)|
+| **Limpieza automática**       | Programada diariamente               |
+| **Detección de hojas**        | ADF y Flatbed                        |
+| **Manejo de errores**         | Robusto con códigos HTTP             |
+| **Documentación**             | README y context.txt completos       |
+| **Integración Django**        | Estrategia Pull documentada y lista  |
+| **Despliegue Producción**     | Tarea Programada Windows (pythonw)   |
+| **Logging Producción**        | Rotativo a archivo (máx 30MB)        |
+
+---
+
+# Funcionalidades Implementadas
+
+## 🎯 **API REST Completa**
+
+### **Endpoints de Verificación**
+- ✅ `GET /` - Estado del servicio Flask
+- ✅ `GET /api/scan/check-scanner` - Verifica disponibilidad con timeouts diferenciados
+  - **Timeouts**: ADF (7s), Flatbed (28s)
+  - **Respuestas**: 200 (OK), 503 (No disponible), 504 (Timeout/Apagado)
+- ✅ `GET /api/scan/check-feeder` - Verifica papel en bandeja ADF
+- ✅ `GET /api/scan/status` - Estado del escaneo en tiempo real
+
+### **Endpoints de Escaneo**
+- ✅ `POST /api/scan/start` - Inicia nueva sesión de escaneo
+  - Validación de parámetros (DPI, color, tamaño, rotación)
+  - Verificación previa de hojas disponibles
+  - Creación de carpeta de sesión única
+  - Respuesta inmediata con `session_id`
+- ✅ `POST /api/scan/continue` - Continúa escaneando en sesión activa
+  - Permite agregar más páginas sin cerrar la sesión
+  - Útil para escaneo por lotes
+- ✅ `POST /api/scan/cancel` - Cancela escaneo y elimina archivos
+  - Limpieza completa de la sesión
+  - Liberación del bloqueo del escáner
+- ✅ `POST /api/scan/finish` - Finaliza sesión y limpia archivos
+  - Libera el escáner para otros usuarios
+  - Elimina carpeta temporal después de confirmar
+
+### **Endpoints de Recuperación de Datos**
+- ✅ `GET /api/scan/pages` - Lista páginas de sesión activa
+- ✅ `GET /api/scan/pages/<session_id>` - Lista páginas de sesión específica
+- ✅ `GET /api/scan/download/<session_id>/<filename>` - Descarga imagen WEBP/PNG
+  - Django usa este endpoint para obtener las imágenes
+
+### **Endpoints de Limpieza**
+- ✅ `POST /api/scan/run-cleanup` - Limpieza manual de sesiones residuales
+- ✅ `DELETE /api/scan/cleanup/<session_id>` - Elimina carpeta de sesión específica
+
+---
+
+## 🔒 **Sistema de Bloqueo de Sesiones**
+
+- ✅ **Bloqueo exclusivo**: Solo un usuario puede escanear a la vez
+- ✅ **Timeout de sesión**: 20 minutos de duración máxima
+- ✅ **Estado thread-safe**: Uso de `threading.Lock()` para prevenir race conditions, es para asegurar que no haya conflictos al acceder/modificar el estado de la sesión
+- ✅ **Liberación automática**: Al finalizar, cancelar o por timeout
+- ✅ **Validación de sesión activa**: Verifica que la sesión pertenezca al usuario correcto
+
+---
+
+## ⏱️ **Sistema de Timeouts**
+
+### **Verificación de Escáner (check-scanner)**
+```python
+FEEDER_TIMEOUT = 7                    # ADF responde rápido
+FLATBED_CONNECTION_TIMEOUT = 12       # Fase 1: conexión al cristal
+FLATBED_SCAN_TIMEOUT = 28             # Fase 2: escaneo activo en cristal
+```
+
+### **Implementación con ThreadPoolExecutor**
+- ✅ No usa `with` para evitar esperar threads bloqueados
+- ✅ `executor.shutdown(wait=False)` abandona threads zombie
+- ✅ Endpoint responde correctamente incluso si TWAIN se bloquea en C
+- ✅ Tiempo total máximo: ~28 segundos (incluye timeout de verificación y overhead)
+
+### **Códigos de Respuesta HTTP**
+- **200**: Escáner disponible y listo
+- **503**: Escáner responde pero sin hojas
+- **504**: Timeout - escáner apagado/desconectado
+- **409**: Sesión en uso por otro usuario
+- **400**: Parámetros inválidos
+- **500**: Error interno del servidor
+
+---
+
+## 🧹 **Sistema de Limpieza Automática**
+
+### **Limpieza Programada**
+- ✅ Se ejecuta diariamente a las **15:30** (configurable en `run_production.py` / `run_with_console.py`)
+- ✅ Usa `threading.Timer` para programación asíncrona
+- ✅ Se reprograma automáticamente después de cada ejecución
+
+### **Criterios de Limpieza**
+```python
+timeout_minutes = 20  # Carpetas con > 20 min de inactividad
+```
+- ✅ Revisa fecha de modificación de carpetas de sesión para detectar inactividad y eliminar según inactividad
+- ✅ Protege sesiones activas en progreso (no las elimina) al usar /continue
+- ✅ Elimina carpetas huérfanas de sesiones expiradas
+- ✅ Libera locks de sesiones residuales
+
+### **Limpieza Manual**
+- Endpoint `/run-cleanup` permite forzar limpieza
+- Ejecuta en thread separado para no bloquear la API porque puede tardar en completarse, es decir , no espera a que termine la limpieza para responder al usuario
+- Loguea advertencias si hay escaneo activo
+
+---
+
+## 🖼️ **Procesamiento de Imágenes**
+
+### **Detección de Páginas en Blanco**
+```python
+def is_blank_page(img, threshold=0.01):
+    # Detecta si > 99% de píxeles son blancos
+```
+- ✅ Omite páginas en blanco automáticamente
+- ✅ Configurable: `max_blank_pages` (por defecto 2)
+- ✅ Evita escanear páginas vacías del ADF
+
+### **Formato de Salida**
+- ✅ **WEBP (por defecto) o PNG (legacy)** con compresión configurable
+- ✅ Nomenclatura: `page_001.webp` (o `.png` si `SCAN_IMAGE_FORMAT=png`)
+- ✅ Carpetas por sesión: `session_<timestamp>_<user_id>/`
+
+### **Rotación Automática**
+- ✅ Soporta: `off`, `right90`, `180`, `left90`
+- ✅ Se aplica antes de guardar la imagen (WEBP/PNG)
+- ✅ Útil para hojas horizontales (tipo carta)
+
+---
+
+## 📊 **Estrategia de Integración con Django**
+
+### **Flujo Recomendado (Pull Strategy)**
+
+```
+1. Django → POST /api/scan/start
+   ↓ Respuesta: {session_id: "session_123"}
+
+2. Django → GET /api/scan/status (polling cada 2s)
+   ↓ Loop hasta status: "completed" o "error"
+
+3. Django → GET /api/scan/pages/{session_id}
+   ↓ Respuesta: {pages: [{filename, page_number, full_path}]}
+
+4. Django → GET /api/scan/download/{session_id}/{filename} (por cada página)
+  ↓ Descarga WEBP/PNG y guarda en Django media folder
+
+5. Usuario decide en el frontend:
+   a) "Escanear más páginas" → Django → POST /api/scan/continue
+      └─ Volver al paso 2
+   
+   b) "Ya terminé" → Django → POST /api/scan/finish
+      └─ Flask limpia la sesión y libera el escáner
+
+6. NO usar /cleanup/{session_id} salvo para limpieza manual de sesiones huérfanas
+```
+
+### **Ventajas del Pull**
+- ✅ Django controla el flujo completo
+- ✅ Manejo de errores más simple
+- ✅ Reintentos automáticos si falla descarga
+- ✅ Menos acoplamiento entre sistemas
+
+---
+
+## 🔧 **Configuración de Parámetros**
+
+### **Valores por Defecto (config/config.py)**
+```python
+DEFAULT_DPI = 300
+DEFAULT_COLOR_MODE = "Color"
+DEFAULT_DUPLEX = False
+DEFAULT_FEEDER = True  # True = ADF, False = Flatbed
+DEFAULT_PAGE_SIZE = "LT-R"
+DEFAULT_ROTATION = "off"
+```
+
+### **Valores Permitidos**
+```python
+ALLOWED_DPI = [300, 400, 600]
+SCAN_MODES = ["Text", "Gray", "Color", "Text/Photo"]
+PAGE_SIZES = {
+    "A4-R": "200 x 290 mm",
+    "LT-R": "210 x 280 mm (Carta)",
+    "13-LG": "210 x 330 mm (Oficio)",
+    "A5-R": "148 x 210 mm",
+}
+ROTATIONS = ["off", "right90", "180", "left90"]
+```
+
+---
+
+# ✅ Primera parte COMPLETADA
+
+👉 **Estado actual del proyecto:**
+
+* ✅ Estructura modular implementada
+* ✅ Endpoints RESTful completos y funcionales
+* ✅ Sistema de sesiones con bloqueo
+* ✅ Verificación robusta con timeouts
+* ✅ Limpieza automática programada
+* ✅ Detección inteligente de hojas (ADF y Flatbed)
+* ✅ Manejo robusto de errores
+* ✅ Documentación completa (README.md y context.txt)
+
+---
+
+## 🔧 Correcciones de Producción (Diciembre 2025 - Enero 2026)
+
+### Memory Leaks Resueltos (WinError 32)
+- ✅ **services/twain_connector.py**: Implementado context manager `with Image.open()` en:
+  - `scan_document()` líneas 294, 424
+  - `validate_and_scan_flatbed()` línea 562 (ya estaba correcto)
+- ✅ **utils/image_orientation.py**: Context manager en `detect_orientation()` y `auto_rotate_image()`
+- ✅ **utils/file_manager.py**: Finally block para cerrar imágenes en `save_page_as_png()`
+- ✅ Agregado `gc.collect()` para forzar liberación de memoria
+
+### Timeouts Estandarizados
+- ✅ **FEEDER_TIMEOUT**: 7 segundos (ADF responde rápido)
+- ✅ **FLATBED_CONNECTION_TIMEOUT**: 12 segundos (Fase 1: conexión al hardware del cristal)
+- ✅ **FLATBED_SCAN_TIMEOUT**: 28 segundos (Fase 2: escaneo activo en cristal)
+- ✅ **Session timeout**: 20 minutos (consistente en `session_lock.py` y `scan_controller.py`)
+- ✅ **Cleanup timeout**: 20 minutos de inactividad
+
+### Logging Mejorado
+- ✅ Todos los `print()` reemplazados por `logger.info()`, `logger.warning()`, `logger.error()`
+- ✅ 28 reemplazos en `services/twain_connector.py`
+- ✅ Logging consistente en todos los módulos
+
+### Despliegue Producción (Enero 2026)
+- ✅ **Tarea Programada Windows**: Despliegue recomendado para compatibilidad con TWAIN
+- ✅ **pythonw.exe**: Ejecución sin ventana para evitar cierres accidentales
+- ✅ **Logging rotativo**: `RotatingFileHandler` con máx 5MB x 5 archivos = 30MB total
+- ✅ **Auto-reinicio**: 5 intentos con intervalo de 1 minuto
+- ✅ **Script portable**: `instalar_tarea.ps1` detecta rutas automáticamente
+
+### Configuración y Documentación
+- ✅ **config/settings.py**: Validación `Literal` para `log_level`
+- ✅ **app.py**: Logs de inicialización solo en `if __name__ == "__main__"` (sin duplicados)
+- ✅ **utils/list_scanners.py**: Uso correcto de `sm.destroy()` (minúscula)
+- ✅ Docstrings mejorados en todos los módulos
+
+---
+
+**Próximos pasos:**
+- 🔄 Integración con Django (Pull Strategy)
+- 🔄 Pruebas de integración end-to-end
+- 📋 Pruebas unitarias automatizadas
+- ✅ ~~Despliegue como servicio de Windows~~ (Completado con Tarea Programada)
+
+---
+
+DEMAS COSAS A TENER EN CUENTA
+- el conector al final sera un servicio que se ejecuta en segundo plano, sera como un ejecutable que se pone en cada equipo que va a hacer uso de la pagina
+- la app web en el servidor django hara peticiones a este servicio local, tendra las opciones de iniciar escaneo, cancelar, ver estado, cuando tenga las imagenes que pueda modificar la horientación y el orden en el que se almacenaran como pdf, asi mismo luego de extraer los datos con OCR y estructurarlos con IA que se pueda ver todos los datos desde el frontend y ser editables en caso de que el OCR no haya sido 100% efectivo
+- en caso de radiografias o documentos no legibles por el escaner se tendra la posiblidad de subir los archivos desde el equipo o ya sea tomandole foto desde un dispositivo movil para que se puedan pasar y subir al aplicativo
+## 📋 Checklist de Tareas
+
+### ✅ **Completadas**
+
+1. ✅ **Manejo de errores TWAIN** - Captura y manejo robusto con try-except y códigos HTTP
+2. ✅ **Limpieza de recursos** - Cierre correcto de sesión TWAIN con `source.destroy()` y `sm.destroy()`
+3. ✅ **Documentación** - README.md y context.txt completos con ejemplos
+4. ✅ **Logs** - Logs en terminal con `print()` y mensajes debug configurables
+5. ✅ **Validación de entradas** - Función `validate_scan_params()` para todos los parámetros
+6. ✅ **Timeouts robustos** - Sistema con ThreadPoolExecutor para prevenir bloqueos
+7. ✅ **Sistema de sesiones** - Bloqueo exclusivo con timeout de 20 minutos
+8. ✅ **Limpieza automática** - Programada diariamente con criterios de inactividad
+9. ✅ **Detección de hojas** - Verificación previa en ADF y Flatbed
+10. ✅ **Compatibilidad Windows 10/11** - Probado y funcional con Python 32-bit
+
+---
+
+### 🔄 **En Progreso / Siguientes Pasos**
+
+11. 🔄 **Integración con Django** - Estrategia Pull documentada, pendiente implementación
+12. 🔄 **Pruebas de integración** - Probar flujo completo Flask → Django → Usuario
+13. 📋 **Pruebas unitarias** - Crear tests para funciones críticas (pytest)
+14. 📋 **Logs estructurados** - Migrar a logging JSON para mejor análisis
+15. 📋 **Autenticación** - Implementar JWT o API keys para endpoints
+16. 📋 **Despliegue y operación** - Fortalecer tareas programadas, monitoreo y empaquetado controlado
+
+---
+
+### 📅 **Planificado (Post-MVP)**
+
+17. 📅 **Escalabilidad multi-escáner** - Detectar múltiples escáneres en red local
+18. 📅 **Interfaz web de administración** - Panel para configuración y monitoreo
+19. 📅 **Métricas de rendimiento** - Prometheus/Grafana para monitoreo
+20. 📅 **Pruebas de carga** - Simular múltiples sesiones concurrentes
+21. 📅 **Backup automático** - Copia de seguridad de imágenes antes de limpiar
+22. 📅 **Compatibilidad multi-marca** - Soporte para otros fabricantes de escáneres
+23. 📅 **Actualización automática** - Sistema de auto-actualización del conector
+24. 📅 **Documentación de usuario** - Manual con screenshots y troubleshooting
+25. 📅 **Formación** - Videos tutoriales para instalación y uso
+26. 📅 **Plan de contingencia** - Modo fallback: subir PDFs manualmente y hacer OCR
+27. 📅 **Evaluación de costos** - TCO (Total Cost of Ownership) del sistema
+28. 📅 **Cumplimiento normativo** - GDPR/HIPAA si maneja datos sensibles
+29. 📅 **Revisión de seguridad** - Auditoría de seguridad y penetration testing
+30. 📅 **Optimización avanzada** - Compresión de imágenes, procesamiento paralelo
+
+---
+
+### 🔐 **Consideraciones de Seguridad (Futura)**
+
+- 🔐 Autenticación y autorización para endpoints
+- 🔐 Cifrado de comunicación (HTTPS/TLS)
+- 🔐 Rate limiting para prevenir abuso
+- 🔐 Validación y sanitización de nombres de archivo
+- 🔐 Protección contra path traversal
+- 🔐 Auditoría de accesos y cambios
+
+---
+
+### 🎯 **Hitos del Proyecto**
+
+| Hito | Estado | Fecha |
+|------|--------|-------|
+| **MVP - Conector Flask funcional** | ✅ Completado | Nov 2025 |
+| **Despliegue en producción** | ✅ Completado | Ene 2026 |
+| **Integración con Django** | 🔄 En progreso | Pendiente |
+| **Módulo OCR + IA** | 📅 Fase 3 | Pendiente |
+
+---
+LAS HOJAS QUE SEAN DE TIPO CARTA DEBEN DE INGRESARSE HORIZONTALMENTE Y HACIA ARRIBA, ELLAS CAMBIAN AUTOMATICAMENTE A 90 GRADOS A LA IZQUIERDA PARA QUEDAR DERECHAS, 
+LAS DE TIPO OFICIO VERTICALMENTE

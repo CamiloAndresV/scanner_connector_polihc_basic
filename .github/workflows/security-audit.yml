@@ -1,0 +1,145 @@
+name: Security Audit
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master]
+  schedule:
+    # Ejecutar cada martes a las 9:00 AM UTC
+    - cron: '0 9 * * 2'
+  workflow_dispatch:
+    inputs:
+      auto_update:
+        description: 'Actualizar dependencias automáticamente'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+jobs:
+  security-audit:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit safety
+          pip install -r requirements.txt
+
+      - name: Run pip-audit
+        id: audit
+        run: |
+          pip-audit -r requirements.txt --desc on --format json > audit_report.json || true
+          cat audit_report.json
+        continue-on-error: true
+
+      - name: Check vulnerabilities
+        id: check_vulns
+        run: |
+          if [ -f audit_report.json ]; then
+            VULN_COUNT=$(python -c "import json; data=json.load(open('audit_report.json')); print(sum(len(d.get('vulns', [])) for d in data.get('dependencies', [])))")
+            echo "vuln_count=$VULN_COUNT" >> $GITHUB_OUTPUT
+            echo "Vulnerabilidades encontradas: $VULN_COUNT"
+          else
+            echo "vuln_count=0" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update dependencies if vulnerabilities found
+        if: steps.check_vulns.outputs.vuln_count > 0 || github.event.inputs.auto_update == 'true'
+        run: |
+          echo "🔄 Actualizando dependencias..."
+          
+          # Crear backup
+          cp requirements.txt requirements.backup.txt
+          
+          # Actualizar paquetes con vulnerabilidades
+          pip list --outdated --format=json | python -c "
+          import json, sys, subprocess
+          outdated = json.load(sys.stdin)
+          for pkg in outdated:
+              print(f'Actualizando {pkg[\"name\"]}...')
+              subprocess.run(['pip', 'install', '--upgrade', pkg['name']])
+          "
+          
+          # Generar nuevo requirements.txt
+          pip freeze > requirements.txt
+          
+          echo "✅ Dependencias actualizadas"
+
+      - name: Run pip-audit again after update
+        if: steps.check_vulns.outputs.vuln_count > 0 || github.event.inputs.auto_update == 'true'
+        run: |
+          echo "🔍 Re-auditando después de actualización..."
+          pip-audit -r requirements.txt --desc on
+        continue-on-error: true
+
+      - name: Create Pull Request with updates
+        if: steps.check_vulns.outputs.vuln_count > 0 || github.event.inputs.auto_update == 'true'
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: 'chore: actualizar dependencias por auditoría de seguridad'
+          title: '🔒 Actualización automática de dependencias'
+          body: |
+            ## 🔒 Actualización Automática de Seguridad
+            
+            Esta PR fue generada automáticamente por la auditoría de seguridad.
+            
+            ### Cambios
+            - ✅ Dependencias actualizadas para resolver vulnerabilidades
+            - 📊 Vulnerabilidades encontradas: ${{ steps.check_vulns.outputs.vuln_count }}
+            - 📝 Backup guardado en requirements.backup.txt
+            
+            ### Acciones realizadas
+            1. Auditoría con pip-audit
+            2. Actualización de paquetes vulnerables
+            3. Re-auditoría post-actualización
+            
+            Por favor revisa los cambios antes de hacer merge.
+          branch: security/dependency-updates
+          delete-branch: true
+
+      - name: Run safety check
+        run: |
+          safety check -r requirements.txt --full-report
+        continue-on-error: true
+
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-audit-report
+          path: |
+            audit_report.json
+            requirements.backup.txt
+          retention-days: 30
+
+      - name: Summary
+        run: |
+          echo "## 🔒 Security Audit Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Resultados" >> $GITHUB_STEP_SUMMARY
+          echo "- Vulnerabilidades encontradas: ${{ steps.check_vulns.outputs.vuln_count }}" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.check_vulns.outputs.vuln_count }}" -gt "0" ]; then
+            echo "- ⚠️ Se creó un PR con actualizaciones automáticas" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ✅ No se encontraron vulnerabilidades" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Revisa los logs arriba para más detalles." >> $GITHUB_STEP_SUMMARY
