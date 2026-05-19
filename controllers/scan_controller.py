@@ -132,7 +132,8 @@ scan_state = {
 state_lock = threading.RLock()
 
 def reset_scan_state():
-    """Reinicia el estado del escaneo.
+    """
+    Reinicia el estado del escaneo.
     Seguro de llamar con o sin state_lock gracias a RLock.
     """
     with state_lock:
@@ -427,55 +428,50 @@ _zombie_threads = 0
 @scan_bp.route('/check-scanner', methods=['GET'])
 def check_scanner_connection():
     """
-        Verifica la conexión REAL con el escáner (hardware físico).
-        ---
-        tags:
-            - conexión
-        summary: Comprueba si el escáner está encendido y disponible
-        description: |
-            Realiza una verificación ligera del hardware usando check_feeder
-            con timeout de 7 segundos. NO verifica ADF ni escanea páginas completas.
-
-            Esta verificación SÍ detecta:
-            - Escáner con conexión → status 200
-            - Escáner desconectado/apagado (cable/wifi) → Error 504
-            - Driver bloqueado → Error 503
-
-            Esta verificación NO valida:
-            - Si hay papel en ADF (eso es responsabilidad de /check-feeder)
-            - Si hay hoja en cristal (eso es /check-flatbed)
-
-            Si el timeout se activa (7s), significa problema de conexión física.
-
-        parameters:
-            - in: query
-                name: scanner_name
-                required: false
-                schema:
-                    type: string
-                description: Nombre exacto del escáner TWAIN a verificar. Si no se envía, usa configuración primaria.
-            - in: query
-                name: allow_fallback
-                required: false
-                schema:
-                    type: boolean
-                    default: true
-                description: Si es true permite intentar escáner secundario; si es false opera en modo estricto.
-
-        responses:
-            200:
-                description: Escáner conectado y respondiendo (puede estar sin papel).
-                examples:
-                    application/json: {
-                        "success": true,
-                        "message": "Escáner conectado y listo",
-                        "hardware_connected": true,
-                        "adf_status": "ready"
-                    }
-            503:
-                description: Escáner no disponible o desconectado.
-            504:
-                description: Tiempo de conexión agotado (escáner apagado o sin red).
+    Verifica la conexión REAL con el escáner (hardware físico).
+    ---
+    tags:
+      - conexión
+    summary: Comprueba si el escáner está encendido y disponible
+    description: |
+      Realiza una verificación ligera del hardware usando check_feeder
+      con timeout de 7 segundos. NO verifica ADF ni escanea páginas completas.
+      Esta verificación SÍ detecta:
+      - Escáner con conexión → status 200
+      - Escáner desconectado/apagado (cable/wifi) → Error 504
+      - Driver bloqueado → Error 503
+      Esta verificación NO valida:
+      - Si hay papel en ADF (eso es responsabilidad de /check-feeder)
+      - Si hay hoja en cristal (eso es /check-flatbed)
+      Si el timeout se activa (7s), significa problema de conexión física.
+    parameters:
+      - in: query
+        name: scanner_name
+        required: false
+        schema:
+          type: string
+        description: Nombre exacto del escáner TWAIN a verificar. Si no se envía, usa configuración primaria.
+      - in: query
+        name: allow_fallback
+        required: false
+        schema:
+          type: boolean
+          default: true
+        description: Si es true permite intentar escáner secundario; si es false opera en modo estricto.
+    responses:
+      200:
+        description: Escáner conectado y respondiendo (puede estar sin papel).
+        examples:
+          application/json: {
+            "success": true,
+            "message": "Escáner conectado y listo",
+            "hardware_connected": true,
+            "adf_status": "ready"
+          }
+      503:
+        description: Escáner no disponible o desconectado.
+      504:
+        description: Tiempo de conexión agotado (escáner apagado o sin red).
     """
     try:
         requested_scanner = request.args.get('scanner_name', type=str)
@@ -1493,8 +1489,8 @@ def get_scanned_pages():
             session_id: "abc123"
             page_count: 3
             pages:
-                            - filename: "page_1.webp"
-                                download_url: "http://localhost:5000/api/scan/download/abc123/page_1.webp"
+              - filename: "page_1.webp"
+                download_url: "http://localhost:5000/api/scan/download/abc123/page_1.webp"
       404:
         description: No hay sesión activa.
       503:
@@ -1552,7 +1548,7 @@ def get_session_pages(session_id):
         type: string
         required: true
         description: ID de la sesión a consultar (puede incluir o no el prefijo 'session_')
-        
+      
     responses:
       200:
         description: Páginas escaneadas encontradas.
@@ -1562,8 +1558,8 @@ def get_session_pages(session_id):
             session_id: "session_abc123"
             page_count: 3
             pages:
-                            - filename: "page_1.webp"
-                                download_url: "http://localhost:5000/api/scan/download/session_abc123/page_1.webp"
+              - filename: "page_1.webp"
+                download_url: "http://localhost:5000/api/scan/download/session_abc123/page_1.webp"
       404:
         description: Sesión no encontrada.
       503:
@@ -1610,70 +1606,69 @@ def get_session_pages(session_id):
 @scan_bp.route('/download/<session_id>/<filename>', methods=['GET'])
 def download_page(session_id, filename):
     """
-        Descarga una imagen específica de una sesión.
-        ---
-        tags:
-            - Descarga
-        summary: Obtener archivo WEBP de una sesión
-        description: |
-            Permite descargar un archivo específico de una sesión de escaneo.
-            Django u otros clientes pueden usar esta ruta para obtener los archivos WEBP generados
-            (PNG legacy si existiera por sesiones anteriores).
+    Descarga una imagen específica de una sesión.
+    ---
+    tags:
+      - Descarga
+    summary: Obtener archivo WEBP de una sesión
+    description: |
+      Permite descargar un archivo específico de una sesión de escaneo.
+      Django u otros clientes pueden usar esta ruta para obtener los archivos WEBP generados
+      (PNG legacy si existiera por sesiones anteriores).
 
-            Validaciones de seguridad:
-            - Sanitiza filename con secure_filename()
-            - Solo permite archivos .webp (y .png legacy)
-            - Previene path traversal attacks
+      Validaciones de seguridad:
+      - Sanitiza filename con secure_filename()
+      - Solo permite archivos .webp (y .png legacy)
+      - Previene path traversal attacks
 
-        parameters:
-            - name: session_id
-                in: path
-                type: string
-                required: true
-                description: ID de la sesión (puede incluir o no el prefijo 'session_')
-            - name: filename
-                in: path
-                type: string
-                required: true
-                description: Nombre del archivo a descargar (ej. "page_1.webp")
-        responses:
-            200:
-                description: Archivo descargado correctamente
-                content:
-                    image/webp:
-                        schema:
-                            type: string
-                            format: binary
-            400:
-                description: Validación de seguridad fallida
-                examples:
-                    application/json:
-                        nombre_invalido:
-                            value:
-                                success: false
-                                error: "Nombre de archivo inválido"
-                        extension_invalida:
-                            value:
-                                success: false
-                                error: "Solo se permiten archivos WEBP o PNG"
-                        path_traversal:
-                            value:
-                                success: false
-                                error: "Nombre de archivo inválido"
-            404:
-                description: Sesión o archivo no encontrado
-                examples:
-                    application/json:
-                        sesion_no_existe:
-                            value:
-                                success: false
-                                error: "Sesión no encontrada"
-                        archivo_no_existe:
-                            value:
-                                success: false
-                                error: "Archivo no encontrado"
+    parameters:
+      - name: session_id
+        in: path
+        type: string
+        required: true
+        description: ID de la sesión (puede incluir o no el prefijo 'session_')
+      - name: filename
+        in: path
+        type: string
+        required: true
+        description: Nombre del archivo a descargar (ej. "page_1.webp")
+    responses:
+      200:
+        description: Archivo descargado correctamente
+        content:
+          image/webp:
+            schema:
+              type: string
+              format: binary
+      400:
+        description: Validación de seguridad fallida
+        examples:
+          application/json:
+            nombre_invalido:
+              value:
+                success: false
+                error: "Nombre de archivo inválido"
+            extension_invalida:
+              value:
+                success: false
+                error: "Solo se permiten archivos WEBP o PNG"
+            path_traversal:
+              value:
+                success: false
+                error: "Nombre de archivo inválido"
+      404:
+        description: Sesión o archivo no encontrado
+        examples:
+          application/json:
+            sesion_no_existe:
+              value:
+                success: false
+                error: "Sesión no encontrada"
+            archivo_no_existe:
+              value:
+                success: false
+                error: "Archivo no encontrado"
     """
-
     # Validar y sanitizar filename
     safe_filename = secure_filename(filename)
     if not safe_filename:
