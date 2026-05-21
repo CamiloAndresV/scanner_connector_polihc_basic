@@ -278,6 +278,7 @@ def validate_scanner_config():
         # Obtener lista de escáneres disponibles
         available_scanners = sm.GetSourceList() or []
         configured_scanner = settings.scanner_name
+        configured_scanner2 = settings.scanner_name_secondary
         
         if configured_scanner not in available_scanners:
             logger.error("=" * 70)
@@ -298,6 +299,7 @@ def validate_scanner_config():
             return False
         
         logger.info(f"✅ Escáner configurado correctamente: '{configured_scanner}'")
+        logger.info(f"✅ Escáner secundario: '{configured_scanner2}'")
         return True
         
     except Exception as e:
