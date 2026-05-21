@@ -32,7 +32,7 @@ except ImportError:
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 # Verificar que no estamos en modo debug
-os.environ.setdefault('DEBUG', 'False')
+# os.environ.setdefault('DEBUG', 'False')
 
 # === BLOQUEO DE CIERRE DE VENTANA (WINDOWS API) ===
 def disable_close_button():

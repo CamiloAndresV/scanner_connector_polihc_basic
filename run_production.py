@@ -14,7 +14,7 @@ from datetime import datetime
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 # Verificar que no estamos en modo debug
-os.environ.setdefault('DEBUG', 'False')
+# os.environ.setdefault('DEBUG', 'False')
 
 # === CONFIGURACIÓN DE LOGGING PARA PRODUCCIÓN ===
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
